@@ -328,26 +328,37 @@ interface PushCommand {
   ref: string;
 }
 
+/** Read one pkt-line at `offset`: its packet and the offset just past it, or null when incomplete. */
+function readPktLineAt(buffer: Buffer, offset: number): { packet: PktPacket; next: number } | null {
+  if (offset + 4 > buffer.length) return null;
+  const header = buffer.subarray(offset, offset + 4).toString('ascii');
+  if (!/^[0-9a-fA-F]{4}$/.test(header)) throw new Error('bad pkt-line length');
+  const length = parseInt(header, 16);
+  if (length === 0) return { packet: { kind: 'flush' }, next: offset + 4 };
+  if (length === 1) return { packet: { kind: 'delim' }, next: offset + 4 };
+  if (length === 2) return { packet: { kind: 'response-end' }, next: offset + 4 };
+  if (length < 4 || offset + length > buffer.length) throw new Error('truncated pkt-line');
+  return { packet: { kind: 'data', payload: buffer.subarray(offset + 4, offset + length) }, next: offset + length };
+}
+
 function receivePack(req: GitHttpRequest, repo: RepoRec): GitHttpReply {
   let commands: PushCommand[] = [];
   let capabilities: string[] = [];
   let pack = Buffer.alloc(0);
   try {
-    const { packets, next } = decodePktLines(req.body);
+    // Command pkt-lines up to the flush; everything after the flush is the pack (possibly empty).
     let offset = 0;
     let sawFlush = false;
-    for (const packet of packets) {
-      if (packet.kind === 'flush') {
-        offset += 4;
+    for (;;) {
+      const read = readPktLineAt(req.body, offset);
+      if (read === null) break;
+      offset = read.next;
+      if (read.packet.kind === 'flush') {
         sawFlush = true;
         break;
       }
-      if (packet.kind !== 'data') {
-        offset += 4;
-        continue;
-      }
-      offset += 4 + packet.payload.length;
-      const rawLine = packet.payload.toString('utf8').replace(/\n$/, '');
+      if (read.packet.kind !== 'data') continue;
+      const rawLine = read.packet.payload.toString('utf8').replace(/\n$/, '');
       const { text, capabilities: caps } = splitCapabilities(rawLine);
       if (commands.length === 0 && caps.length > 0) capabilities = caps;
       const parts = text.split(' ');
@@ -355,9 +366,8 @@ function receivePack(req: GitHttpRequest, repo: RepoRec): GitHttpReply {
         commands.push({ oldOid: (parts[0] as string).toLowerCase(), newOid: (parts[1] as string).toLowerCase(), ref: parts[2] as string });
       }
     }
+    if (!sawFlush && commands.length === 0) throw new Error('no commands');
     if (sawFlush) pack = req.body.subarray(offset);
-    else if (packets.length > 0 && commands.length === 0) throw new Error('no commands');
-    void next;
   } catch {
     return textReply(400, 'bad request');
   }
