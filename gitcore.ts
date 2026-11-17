@@ -316,18 +316,30 @@ export function selectFetchObjects(
     deepenNot?: readonly string[];
   },
 ): FetchSelection {
-  const excluded = new Set<string>();
-  for (const have of options.haves ?? []) {
-    if (store.has(have)) for (const oid of fullClosure(store, [have])) excluded.add(oid);
-  }
-  for (const not of options.deepenNot ?? []) {
-    if (store.has(not)) for (const oid of fullClosure(store, [not])) excluded.add(oid);
-  }
   // Commits the client already holds shallowly: their objects are held, their ancestors are not.
   const heldShallow = new Set<string>();
   for (const boundary of options.clientShallow ?? []) {
     const commit = peelToCommit(store, boundary);
     if (commit !== null) heldShallow.add(commit);
+  }
+  const excluded = new Set<string>();
+  for (const have of options.haves ?? []) {
+    if (!store.has(have)) continue;
+    const commit = peelToCommit(store, have);
+    if (commit !== null && heldShallow.has(commit)) {
+      // A shallow have excludes only what the client actually holds: the commit and its tree.
+      excluded.add(have);
+      excluded.add(commit);
+      const object = store.get(commit);
+      if (object !== undefined) {
+        for (const oid of fullClosure(store, [parseCommit(object.data).tree])) excluded.add(oid);
+      }
+    } else {
+      for (const oid of fullClosure(store, [have])) excluded.add(oid);
+    }
+  }
+  for (const not of options.deepenNot ?? []) {
+    if (store.has(not)) for (const oid of fullClosure(store, [not])) excluded.add(oid);
   }
 
   const wantCommits: string[] = [];
