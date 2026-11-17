@@ -236,8 +236,12 @@ export function tagTarget(store: ObjectStore, oid: string): string | null {
 // -------------------------------------------------------------------------------------------------
 // Reachability
 
-/** Generations (shortest parent-chain distance) of every commit reachable from the tips. */
-export function commitGenerations(store: ObjectStore, tips: readonly string[]): Map<string, number> {
+/**
+ * Generations (shortest parent-chain distance) of the commits reachable from the tips. When
+ * `maxDepth` is given the walk stops there: commits at that generation are recorded but their
+ * parents are not followed (a depth-limited fetch never needs them).
+ */
+export function commitGenerations(store: ObjectStore, tips: readonly string[], maxDepth: number | null = null): Map<string, number> {
   const generations = new Map<string, number>();
   let frontier: string[] = [];
   for (const tip of tips) {
@@ -250,6 +254,7 @@ export function commitGenerations(store: ObjectStore, tips: readonly string[]): 
   let depth = 0;
   while (frontier.length > 0) {
     depth += 1;
+    if (maxDepth !== null && depth > maxDepth) break;
     const next: string[] = [];
     for (const oid of frontier) {
       const object = store.get(oid);
@@ -347,9 +352,9 @@ export function selectFetchObjects(
     const commit = peelToCommit(store, want);
     if (commit !== null) wantCommits.push(commit);
   }
-  const generations = commitGenerations(store, wantCommits);
   const depth = options.depth ?? null;
   const since = options.deepenSince ?? null;
+  const generations = commitGenerations(store, wantCommits, depth);
 
   const included = new Set<string>();
   const includedCommits = new Set<string>();
@@ -490,10 +495,23 @@ export function buildPack(store: ObjectStore, oids: Iterable<string>): Buffer {
 
 /** Inflate one pack entry starting at `offset`; returns the data and the offset just past the stream. */
 function inflateEntry(buffer: Buffer, offset: number): { data: Buffer; next: number } {
-  // inflateSync tolerates trailing bytes and throws on a truncated stream, so a binary search finds
-  // the exact consumed length.
-  let lo = 1;
-  let hi = buffer.length - offset;
+  // inflateSync tolerates trailing bytes and throws on a truncated stream. Ramp the window up
+  // exponentially to bracket the stream's end, then binary-search inside the bracket for the exact
+  // consumed length: a handful of inflations even for the first entry of a large pack.
+  const remaining = buffer.length - offset;
+  let fail = 0; // the largest window known to be too short
+  let hi = Math.min(remaining, 512); // a window known to be long enough, once the ramp finds one
+  for (;;) {
+    try {
+      inflateSync(buffer.subarray(offset, offset + hi));
+      break;
+    } catch {
+      fail = hi;
+      if (hi >= remaining) throw new Error('pack entry does not inflate');
+      hi = Math.min(remaining, hi * 4);
+    }
+  }
+  let lo = fail + 1;
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
     try {
