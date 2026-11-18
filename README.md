@@ -1,5 +1,9 @@
 # github-core-clone — a GitHub-compatible git forge
 
+[![make.fun bounty](https://make.fun/badge/github-core-clone-01.svg)](https://make.fun/bounty/github-core-clone-01)
+[![rank](https://make.fun/badge/github-core-clone-01/livermorewayne0106-png/github-core-clone-01/rank.svg)](https://make.fun/bounty/github-core-clone-01)
+[![reward](https://make.fun/badge/github-core-clone-01/livermorewayne0106-png/github-core-clone-01/reward.svg)](https://make.fun/bounty/github-core-clone-01)
+
 A single-process GitHub-compatible forge for the make.fun bounty
 [github-core-clone-01](https://make.fun/bounty/github-core-clone-01): git smart HTTP, the REST v3
 surface, GraphQL v4, and an MCP endpoint, all over one in-memory store. Node's standard library
